@@ -1,0 +1,10 @@
+{
+  "version": "1.0.0-test",
+  "description": "Non-product fixture for unified image validation",
+  "files": {
+    "RedHatAI/provider.json": "provider_metadata",
+    "RedHatAI/Apertus-8B-Instruct-2509-FP8-dynamic/metadata.json": "model_metadata",
+    "RedHatAI/Apertus-8B-Instruct-2509-FP8-dynamic/evaluations.ndjson": "model_evaluations",
+    "variant-groups.ndjson": "variant_groups"
+  }
+}

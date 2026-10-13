@@ -1,83 +1,69 @@
-name: Build and Push Static Model Catalog Data Image
+name: Validate Unified Model Catalog Data Image Fixture
 
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - 'data/**'
-      - 'Dockerfile'
-      - '.github/workflows/build-and-push-static-model-catalog-data.yml'
   pull_request:
     branches:
       - main
     paths:
       - 'data/**'
+      - 'input/**'
+      - 'release/**'
+      - 'cmd/release-candidate/**'
+      - 'internal/releasecandidate/**'
       - 'Dockerfile'
+      - 'Dockerfile.konflux'
+      - '.dockerignore'
+      - 'Makefile'
       - '.github/workflows/build-and-push-static-model-catalog-data.yml'
   workflow_dispatch:
 
-env:
-  REGISTRY: quay.io
-  IMAGE_NAME: opendatahub/odh-model-metadata-collection
+permissions:
+  contents: read
 
 jobs:
-  build-and-push:
+  validate-and-build:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
 
-      - name: Log in to Container Registry
-        if: github.event_name != 'pull_request'
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ secrets.QUAY_USERNAME }}
-          password: ${{ secrets.QUAY_PASSWORD }}
+      - name: Test and stage the qualification-contract fixture
+        run: |
+          make test
+          make validate-release-candidate-fixture
 
-      - name: Run tests
-        run: make test
-
-      - name: Extract metadata
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          # disable any implicit "latest"; we’ll add it explicitly below
-          flavor: |
-            latest=false
-          tags: |
-            # branch and branch-<shortsha>
-            type=ref,event=branch
-            type=ref,event=branch,suffix=-{{sha}}
-            # pull request tag (e.g. "pr-42")
-            type=ref,event=pr
-            # standalone sha tag with explicit prefix (e.g. "sha-90dd603")
-            type=sha,prefix=sha-
-            # latest only on main
-            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
-      - name: Build and push static model catalog data image
-        uses: docker/build-push-action@v5
+      # This proves report/digest validation, exact loader-matrix membership,
+      # and unified layout without publishing fixture data. Product promotion
+      # must supply the protected handoff and approved compatibility matrix.
+      - name: Build unified data image fixture
+        uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25 # v5.4.0
         with:
           context: .
           file: ./Dockerfile
-          push: ${{ github.event_name != 'pull_request' }}
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            RELEASE_CANDIDATE_DIR=build/release-candidate-fixture
+          load: true
+          push: false
+          tags: unified-model-catalog-data:fixture
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          platforms: linux/amd64,linux/arm64,linux/ppc64le
+          platforms: linux/amd64
 
-      - name: Output static model catalog data image details
+      - name: Verify payload as an arbitrary non-root user
         run: |
-          echo "Static model catalog data image pushed to: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}"
-          echo "Tags:"
-          echo "${{ steps.meta.outputs.tags }}" | sed 's/^/  - /'
+          docker run --rm --user 1001230000 --entrypoint /bin/sh unified-model-catalog-data:fixture -c '
+            test -r /app/data/validated-models-catalog.yaml &&
+            test -r /app/data/redhat-serving-runtimes-catalog.yaml &&
+            test ! -e /app/data/validated-models-index.yaml &&
+            test -r /app/benchmarks/manifest.json &&
+            test -r /app/benchmarks/RedHatAI/Apertus-8B-Instruct-2509-FP8-dynamic/metadata.json
+          '

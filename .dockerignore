@@ -1,5 +1,9 @@
 # Build artifacts
-build/
+build/*
+!build/release-candidate/
+!build/release-candidate/**
+!build/release-candidate-fixture/
+!build/release-candidate-fixture/**
 output/
 coverage.out
 *.exe

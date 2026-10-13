@@ -1,0 +1,53 @@
+{
+  "benchmark_revision": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "case_only_model_matches": [],
+  "catalog": {
+    "files": [
+      {
+        "name": "other-models-catalog.yaml",
+        "sha256": "41fad64b9e85f8b358484151e28994cac72c7a016c698c25968f366fbf8195a2"
+      },
+      {
+        "name": "validated-models-catalog.yaml",
+        "sha256": "58908b35467d0486e39a4e62779f72e40947fa5e1efaa922a664e76cbf49e7ed"
+      }
+    ],
+    "revision": "cccccccccccccccccccccccccccccccccccccccc"
+  },
+  "catalog_revision": "cccccccccccccccccccccccccccccccccccccccc",
+  "excluded_model_ids": [],
+  "exclusions": {
+    "match_policy": "case-insensitive-exact-full-model-id-v1",
+    "name": "fixture-excluded-models.yaml",
+    "policy_reference": "RHOAIENG-97417",
+    "review_reference": "fixture-only",
+    "review_status": "approved",
+    "sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "version": "1"
+  },
+  "included_model_ids": [
+    "RedHatAI/Apertus-8B-Instruct-2509-FP8-dynamic"
+  ],
+  "match_policy": "case-insensitive-exact-full-model-id-v1",
+  "models": {
+    "case_only_matches": 0,
+    "excluded": 0,
+    "included": 1,
+    "source": 1
+  },
+  "output_manifest_sha256": "43f41253944c42e9b5a638e99e91372ea4468eb5f283efed6204bc1b8d8ddb7b",
+  "payload": {
+    "files": 5,
+    "models": 1,
+    "providers": 1,
+    "variant_groups": 1
+  },
+  "payload_sha256": "a2052385d8d8ea940f9a5230fbd05108f01db97dd4a746eba4e4ee4d221bac37",
+  "source": {
+    "generated_at": "fixture-only",
+    "manifest_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "revision": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "tree_sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+  },
+  "version": "1.0.0"
+}

@@ -48,3 +48,6 @@ jobs:
 
       - name: Run tests
         run: make test
+
+      - name: Validate qualification-report and loader-matrix fixture
+        run: make validate-release-candidate-fixture
