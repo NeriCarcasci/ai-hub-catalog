@@ -478,14 +478,14 @@ func runLoaderChecks(cfg Config) error {
 		output, runErr := command.CombinedOutput()
 		cancel()
 		if ctx.Err() == context.DeadlineExceeded {
-			return fmt.Errorf("Model Catalog loader check %s timed out after 5 minutes", version)
+			return fmt.Errorf("model catalog loader check %s timed out after 5 minutes", version)
 		}
 		if runErr != nil {
 			message := strings.TrimSpace(string(output))
 			if message == "" {
-				return fmt.Errorf("Model Catalog loader check %s failed: %w", version, runErr)
+				return fmt.Errorf("model catalog loader check %s failed: %w", version, runErr)
 			}
-			return fmt.Errorf("Model Catalog loader check %s failed: %w: %s", version, runErr, message)
+			return fmt.Errorf("model catalog loader check %s failed: %w: %s", version, runErr, message)
 		}
 		attestation := "MODEL_CATALOG_LOADER_CHECK_OK=" + version
 		foundAttestation := false
@@ -496,7 +496,7 @@ func runLoaderChecks(cfg Config) error {
 			}
 		}
 		if !foundAttestation {
-			return fmt.Errorf("Model Catalog loader check %s did not attest successful loading with %q", version, attestation)
+			return fmt.Errorf("model catalog loader check %s did not attest successful loading with %q", version, attestation)
 		}
 	}
 	return nil
@@ -1445,7 +1445,7 @@ func validateYAML(path string, data []byte) error {
 		return fmt.Errorf("parse YAML %s: %w", path, err)
 	}
 	if len(doc.Content) == 0 {
-		return fmt.Errorf("YAML file %s is empty", path)
+		return fmt.Errorf("yaml file %s is empty", path)
 	}
 	if err := validateYAMLMappingKeys(doc.Content[0]); err != nil {
 		return fmt.Errorf("parse YAML %s: %w", path, err)
@@ -1453,7 +1453,7 @@ func validateYAML(path string, data []byte) error {
 	var extra yaml.Node
 	if err := decoder.Decode(&extra); err != io.EOF {
 		if err == nil {
-			return fmt.Errorf("YAML file %s contains multiple documents", path)
+			return fmt.Errorf("yaml file %s contains multiple documents", path)
 		}
 		return fmt.Errorf("parse YAML %s: %w", path, err)
 	}
@@ -1487,7 +1487,7 @@ func decodeSingleJSON(path string, data []byte, target any) error {
 	}
 	if _, err := decoder.Token(); err != io.EOF {
 		if err == nil {
-			return fmt.Errorf("JSON file %s contains multiple values", path)
+			return fmt.Errorf("json file %s contains multiple values", path)
 		}
 		return fmt.Errorf("parse JSON %s: %w", path, err)
 	}
