@@ -44,12 +44,16 @@ jobs:
       # This proves report/digest validation, exact loader-matrix membership,
       # and unified layout without publishing fixture data. Product promotion
       # must supply the protected handoff and approved compatibility matrix.
+      # The public, digest-pinned UBI override lets fork CI build without
+      # registry.redhat.io credentials; product builds retain Dockerfile's
+      # separately pinned default base.
       - name: Build unified data image fixture
         uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25 # v5.4.0
         with:
           context: .
           file: ./Dockerfile
           build-args: |
+            BASE_IMAGE=registry.access.redhat.com/ubi9/ubi-minimal@sha256:a21d19f72557aa893a0f6ca1177bb1ffd91df6015e60470a116c50a6a05efcd9
             RELEASE_CANDIDATE_DIR=build/release-candidate-fixture
           load: true
           push: false
