@@ -429,14 +429,14 @@ func runLoaderChecks(cfg Config) error {
 	for _, entry := range entries {
 		checkPath := filepath.Join(cfg.LoaderCheckDir, entry.Name())
 		if entry.IsDir() {
-			return fmt.Errorf("Model Catalog loader check directory must not contain nested directory %s", checkPath)
+			return fmt.Errorf("model catalog loader check directory must not contain nested directory %s", checkPath)
 		}
 		info, err := os.Lstat(checkPath)
 		if err != nil {
 			return fmt.Errorf("inspect Model Catalog loader check %s: %w", checkPath, err)
 		}
 		if !info.Mode().IsRegular() || info.Mode().Perm()&0o111 == 0 {
-			return fmt.Errorf("Model Catalog loader check %s must be a regular executable file", checkPath)
+			return fmt.Errorf("model catalog loader check %s must be a regular executable file", checkPath)
 		}
 		checks[entry.Name()] = checkPath
 	}
@@ -458,7 +458,7 @@ func runLoaderChecks(cfg Config) error {
 	}
 	if len(missing) > 0 || len(extra) > 0 {
 		sort.Strings(extra)
-		return fmt.Errorf("Model Catalog loader check membership does not match %s (missing: %v; extra: %v)", cfg.SupportedVersionList, missing, extra)
+		return fmt.Errorf("model catalog loader check membership does not match %s (missing: %v; extra: %v)", cfg.SupportedVersionList, missing, extra)
 	}
 
 	root, err := filepath.Abs(filepath.Join(cfg.OutputDir, "app"))
@@ -534,15 +534,14 @@ func readSupportedVersionList(path string) ([]string, error) {
 }
 
 func readRuntimeFileList(path string) ([]string, error) {
-	f, err := os.Open(path)
+	data, err := readRegularFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("read runtime catalog list %s: %w", path, err)
 	}
-	defer f.Close()
 
 	seen := map[string]struct{}{}
 	var files []string
-	scanner := bufio.NewScanner(f)
+	scanner := bufio.NewScanner(bytes.NewReader(data))
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" || strings.HasPrefix(line, "#") {
