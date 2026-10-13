@@ -14,6 +14,14 @@ BINARY_UNIX=$(BINARY_NAME)_unix
 # Build parameters
 BUILD_DIR=build
 MAIN_PATH=./cmd/model-extractor
+RELEASE_CANDIDATE_DIR?=$(BUILD_DIR)/release-candidate
+FIXTURE_RELEASE_CANDIDATE_DIR?=$(BUILD_DIR)/release-candidate-fixture
+RUNTIME_CATALOG_FILES?=release/runtime-catalog-files.txt
+BENCHMARK_DATA_DIR?=
+MODEL_CATALOG_LOADER_CHECK_DIR?=
+FIXTURE_BENCHMARK_DATA_DIR=internal/releasecandidate/testdata/benchmarks
+FIXTURE_LOADER_CHECK_DIR=internal/releasecandidate/testdata/loader-checks
+FIXTURE_SUPPORTED_VERSIONS=internal/releasecandidate/testdata/supported-model-catalog-versions.txt
 
 # Default data paths
 REDHAT_MODELS_INDEX_PATH=data/models-index.yaml
@@ -37,7 +45,7 @@ DOCKER_IMAGE_NAME?=quay.io/opendatahub/odh-model-metadata-collection
 DOCKER_IMAGE_TAG?=latest
 DOCKER_FULL_IMAGE_NAME=$(DOCKER_IMAGE_NAME):$(DOCKER_IMAGE_TAG)
 
-.PHONY: all build build-report clean test test-coverage lint fmt vet deps check help run process process-models process-redhat-models process-validated-models process-other-models process-redhat-mcp process-partner-mcp process-community-mcp process-agents report run-with-report docker-build
+.PHONY: all build build-report clean test test-coverage lint fmt vet deps check help run process process-models process-redhat-models process-validated-models process-other-models process-redhat-mcp process-partner-mcp process-community-mcp process-agents report run-with-report validate-release-candidate validate-release-candidate-fixture docker-build docker-build-fixture
 
 # Default target
 all: check build
@@ -209,7 +217,7 @@ run-with-report: run report
 dev: fmt vet test build
 
 # Full CI pipeline
-ci: deps check test build
+ci: deps check test validate-release-candidate-fixture build
 
 # Create release build
 release: clean
@@ -249,18 +257,59 @@ setup:
 
 # Docker targets
 
-# Build container image
-docker-build:
+# Validate every input and stage the exact bytes consumed by the unified Dockerfile.
+# Product use requires the qualified private payload and one loader executable
+# per supported Model Catalog version.
+validate-release-candidate:
+	@if [ -z "$(BENCHMARK_DATA_DIR)" ]; then \
+		echo "BENCHMARK_DATA_DIR must point to a qualified benchmark payload"; \
+		exit 2; \
+	fi
+	@if [ -z "$(MODEL_CATALOG_LOADER_CHECK_DIR)" ]; then \
+		echo "MODEL_CATALOG_LOADER_CHECK_DIR must contain supported-version loader checks"; \
+		exit 2; \
+	fi
+	$(GOCMD) run ./cmd/release-candidate \
+		--catalog-dir data \
+		--producer-input-dir input \
+		--benchmark-dir "$(BENCHMARK_DATA_DIR)" \
+		--runtime-files "$(RUNTIME_CATALOG_FILES)" \
+		--output-dir "$(RELEASE_CANDIDATE_DIR)" \
+		--loader-check-dir "$(MODEL_CATALOG_LOADER_CHECK_DIR)" \
+		--supported-version-list release/supported-model-catalog-versions.txt
+
+# Fixture-only proof for CI. This path cannot be used by the default product
+# Docker build and contains no private benchmark data.
+validate-release-candidate-fixture:
+	$(GOCMD) run ./cmd/release-candidate \
+		--catalog-dir data \
+		--producer-input-dir input \
+		--benchmark-dir "$(FIXTURE_BENCHMARK_DATA_DIR)" \
+		--runtime-files "$(RUNTIME_CATALOG_FILES)" \
+		--output-dir "$(FIXTURE_RELEASE_CANDIDATE_DIR)" \
+		--loader-check-dir "$(FIXTURE_LOADER_CHECK_DIR)" \
+		--supported-version-list "$(FIXTURE_SUPPORTED_VERSIONS)" \
+		--fixture-only
+
+# Build a product candidate only after the blocking validation succeeds.
+docker-build: validate-release-candidate
 	@if [ "$(CONTAINER_RUNTIME)" = "podman" ]; then \
-		podman build -t $(DOCKER_FULL_IMAGE_NAME) .; \
+		podman build --build-arg RELEASE_CANDIDATE_DIR="$(RELEASE_CANDIDATE_DIR)" -t $(DOCKER_FULL_IMAGE_NAME) .; \
 	elif [ -f ~/.docker/config.json ]; then \
 		DOCKER_BUILDKIT=1 $(CONTAINER_RUNTIME) build \
 			--secret id=dockerconfig,src=$$HOME/.docker/config.json \
 			--build-arg BUILDKIT_INLINE_CACHE=1 \
+			--build-arg RELEASE_CANDIDATE_DIR="$(RELEASE_CANDIDATE_DIR)" \
 			-t $(DOCKER_FULL_IMAGE_NAME) .; \
 	else \
-		$(CONTAINER_RUNTIME) build -t $(DOCKER_FULL_IMAGE_NAME) .; \
+		$(CONTAINER_RUNTIME) build --build-arg RELEASE_CANDIDATE_DIR="$(RELEASE_CANDIDATE_DIR)" -t $(DOCKER_FULL_IMAGE_NAME) .; \
 	fi
+
+# Local/CI image-layout proof using only the committed non-product fixture.
+docker-build-fixture: validate-release-candidate-fixture
+	$(CONTAINER_RUNTIME) build \
+		--build-arg RELEASE_CANDIDATE_DIR="$(FIXTURE_RELEASE_CANDIDATE_DIR)" \
+		-t $(DOCKER_FULL_IMAGE_NAME)-fixture .
 	
 # Show help
 help:
@@ -294,5 +343,8 @@ help:
 	@echo "  update-deps  - Update dependencies"
 	@echo "  docs         - Generate documentation"
 	@echo "  setup        - Setup development environment"
-	@echo "  docker-build - Build Docker image"
+	@echo "  validate-release-candidate - Validate and stage catalog plus qualified benchmark data"
+	@echo "  validate-release-candidate-fixture - Validate the committed non-product CI fixture"
+	@echo "  docker-build - Validate and build the unified product image"
+	@echo "  docker-build-fixture - Build a local image-layout proof with fixture data"
 	@echo "  help         - Show this help"

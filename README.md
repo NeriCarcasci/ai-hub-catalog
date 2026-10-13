@@ -170,15 +170,42 @@ Generate metadata completeness reports:
 
 ### Building the Container
 
-The Docker build uses a single-stage approach based on `registry.access.redhat.com/ubi9-micro:latest`. It copies pre-generated catalog files and benchmark data into a minimal image.
+The runtime image uses a digest-pinned UBI candidate base and contains one
+validated release candidate: generated runtime catalogs under `/app/data` and
+the qualified private benchmark handoff under `/app/benchmarks`. Productization
+must approve the reused downstream benchmark base for this unified component.
+Catalog indexes, producer inputs, reports, credentials, and `sample-data` are
+never packaged.
 
 ```bash
-make docker-build
+make validate-release-candidate \
+  BENCHMARK_DATA_DIR=/path/to/qualified/benchmark/data \
+  MODEL_CATALOG_LOADER_CHECK_DIR=/path/to/supported-version-checks
+
+make docker-build \
+  BENCHMARK_DATA_DIR=/path/to/qualified/benchmark/data \
+  MODEL_CATALOG_LOADER_CHECK_DIR=/path/to/supported-version-checks
 ```
 
+The first command is the blocking release gate and stages the exact image bytes
+under `build/release-candidate`. See [`release/README.md`](release/README.md)
+for the handoff and validation contract. `make validate-release-candidate-fixture`
+is a non-product CI proof only.
+
+The dual-payload loader matrix covers RHOAI 3.4 and 3.5. RHOAI 2.25 remains a
+catalog-only consumer because its Model Catalog implementation has no benchmark
+loader; the release gate still validates that the unified image contains a
+qualified benchmark payload compatible with its catalog data.
+
+The regular `Dockerfile` exercises the unified contract. `Dockerfile.konflux`
+keeps its current catalog-only behavior until RHOAIENG-97416 can switch the
+product pipeline atomically without breaking today's pull-request and push
+builds.
+
 The image exposes two volume mount points:
-- `/app/data` — contains the pre-generated catalog and index YAML files
-- `/app/benchmarks` — contains sample benchmark data
+
+- `/app/data` — contains only supported generated runtime catalogs
+- `/app/benchmarks` — contains only the qualified benchmark payload
 
 ### Container Usage Examples
 
@@ -201,7 +228,10 @@ docker rm -f catalog
 
 ```bash
 # Build with custom image name and tag
-DOCKER_IMAGE_NAME=my-model-catalog DOCKER_IMAGE_TAG=v1.0 make docker-build
+DOCKER_IMAGE_NAME=my-model-catalog DOCKER_IMAGE_TAG=v1.0 \
+  make docker-build \
+  BENCHMARK_DATA_DIR=/path/to/qualified/benchmark/data \
+  MODEL_CATALOG_LOADER_CHECK_DIR=/path/to/supported-version-checks
 
 # View image details after build
 docker images model-metadata-collection

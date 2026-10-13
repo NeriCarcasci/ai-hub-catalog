@@ -1,0 +1,9 @@
+# Files from data/ that are shipped in the runtime image.
+# Indexes and generator inputs are intentionally producer-only.
+models-catalog.yaml
+validated-models-catalog.yaml
+other-models-catalog.yaml
+redhat-mcp-servers-catalog.yaml
+partner-mcp-servers-catalog.yaml
+community-mcp-servers-catalog.yaml
+redhat-agents-catalog.yaml
