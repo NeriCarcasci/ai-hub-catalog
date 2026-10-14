@@ -16,6 +16,7 @@ func main() {
 	flag.StringVar(&cfg.CatalogDir, "catalog-dir", "data", "directory containing generated catalogs and indexes")
 	flag.StringVar(&cfg.ProducerInputDir, "producer-input-dir", "input", "directory containing producer-only catalog inputs")
 	flag.StringVar(&cfg.BenchmarkDir, "benchmark-dir", "", "qualified benchmark payload directory (required)")
+	flag.StringVar(&cfg.BenchmarkQualificationReport, "benchmark-qualification-report", "", "qualification report for the benchmark payload (required)")
 	flag.StringVar(&cfg.RuntimeFileList, "runtime-files", "release/runtime-catalog-files.txt", "runtime catalog allowlist")
 	flag.StringVar(&cfg.OutputDir, "output-dir", "build/release-candidate", "validated image build context")
 	flag.StringVar(&cfg.LoaderCheckDir, "loader-check-dir", "", "directory containing one executable check per supported Model Catalog version")
@@ -31,11 +32,19 @@ func main() {
 		fmt.Fprintln(os.Stderr, "release candidate validation failed: --loader-check-dir is required")
 		os.Exit(2)
 	}
+	if cfg.BenchmarkQualificationReport == "" {
+		fmt.Fprintln(os.Stderr, "release candidate validation failed: --benchmark-qualification-report is required")
+		os.Exit(2)
+	}
 	if fixtureOnly {
 		if err := configureFixtureOnly(&cfg); err != nil {
 			fmt.Fprintf(os.Stderr, "release candidate validation failed: %v\n", err)
 			os.Exit(2)
 		}
+		cfg.FixtureOnly = true
+	} else if err := rejectCommittedFixtures(cfg); err != nil {
+		fmt.Fprintf(os.Stderr, "release candidate validation failed: %v\n", err)
+		os.Exit(2)
 	}
 
 	report, err := releasecandidate.ValidateAndStage(cfg)
@@ -55,6 +64,7 @@ func configureFixtureOnly(cfg *releasecandidate.Config) error {
 		expected string
 	}{
 		{"--benchmark-dir", cfg.BenchmarkDir, "internal/releasecandidate/testdata/benchmarks"},
+		{"--benchmark-qualification-report", cfg.BenchmarkQualificationReport, "internal/releasecandidate/testdata/benchmark-qualification-report.json"},
 		{"--supported-version-list", cfg.SupportedVersionList, "internal/releasecandidate/testdata/supported-model-catalog-versions.txt"},
 		{"--loader-check-dir", cfg.LoaderCheckDir, "internal/releasecandidate/testdata/loader-checks"},
 	}
@@ -73,6 +83,33 @@ func configureFixtureOnly(cfg *releasecandidate.Config) error {
 	}
 	if !strings.Contains(filepath.Base(filepath.Clean(cfg.OutputDir)), "fixture") {
 		return fmt.Errorf("--fixture-only output directory name must contain %q", "fixture")
+	}
+	return nil
+}
+
+func rejectCommittedFixtures(cfg releasecandidate.Config) error {
+	paths := []struct {
+		label   string
+		actual  string
+		fixture string
+	}{
+		{"--benchmark-dir", cfg.BenchmarkDir, "internal/releasecandidate/testdata/benchmarks"},
+		{"--benchmark-qualification-report", cfg.BenchmarkQualificationReport, "internal/releasecandidate/testdata/benchmark-qualification-report.json"},
+		{"--supported-version-list", cfg.SupportedVersionList, "internal/releasecandidate/testdata/supported-model-catalog-versions.txt"},
+		{"--loader-check-dir", cfg.LoaderCheckDir, "internal/releasecandidate/testdata/loader-checks"},
+	}
+	for _, item := range paths {
+		actual, err := resolvedAbsolute(item.actual)
+		if err != nil {
+			return fmt.Errorf("resolve %s: %w", item.label, err)
+		}
+		fixture, err := resolvedAbsolute(item.fixture)
+		if err != nil {
+			return fmt.Errorf("resolve committed fixture %s: %w", item.fixture, err)
+		}
+		if actual == fixture {
+			return fmt.Errorf("product validation refuses committed fixture %s; use --fixture-only only for non-product validation", item.label)
+		}
 	}
 	return nil
 }

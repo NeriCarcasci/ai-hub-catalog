@@ -180,10 +180,12 @@ never packaged.
 ```bash
 make validate-release-candidate \
   BENCHMARK_DATA_DIR=/path/to/qualified/benchmark/data \
+  BENCHMARK_QUALIFICATION_REPORT=/path/to/benchmark-qualification-report.json \
   MODEL_CATALOG_LOADER_CHECK_DIR=/path/to/supported-version-checks
 
 make docker-build \
   BENCHMARK_DATA_DIR=/path/to/qualified/benchmark/data \
+  BENCHMARK_QUALIFICATION_REPORT=/path/to/benchmark-qualification-report.json \
   MODEL_CATALOG_LOADER_CHECK_DIR=/path/to/supported-version-checks
 ```
 
@@ -231,6 +233,7 @@ docker rm -f catalog
 DOCKER_IMAGE_NAME=my-model-catalog DOCKER_IMAGE_TAG=v1.0 \
   make docker-build \
   BENCHMARK_DATA_DIR=/path/to/qualified/benchmark/data \
+  BENCHMARK_QUALIFICATION_REPORT=/path/to/benchmark-qualification-report.json \
   MODEL_CATALOG_LOADER_CHECK_DIR=/path/to/supported-version-checks
 
 # View image details after build

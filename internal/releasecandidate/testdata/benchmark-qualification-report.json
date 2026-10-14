@@ -1,0 +1,39 @@
+{
+  "version": "1.0.0",
+  "match_policy": "case-insensitive-exact-full-model-id-v1",
+  "benchmark_revision": "1111111111111111111111111111111111111111",
+  "catalog_revision": "2222222222222222222222222222222222222222",
+  "source": {
+    "revision": "1111111111111111111111111111111111111111"
+  },
+  "catalog": {
+    "revision": "2222222222222222222222222222222222222222",
+    "files": [
+      {
+        "name": "other-models-catalog.yaml",
+        "sha256": "505336e4d5c76b03a71b2662da550b8cf24e0ada8397707d1fe9ec22b4d32619"
+      },
+      {
+        "name": "validated-models-catalog.yaml",
+        "sha256": "97d3fc820b81a2c1b46f9eb0b56e920a075944ddcdd5885fbf1a45d127c6f584"
+      }
+    ]
+  },
+  "exclusions": {
+    "review_status": "fixture",
+    "review_reference": "non-product-fixture",
+    "sha256": "3333333333333333333333333333333333333333333333333333333333333333"
+  },
+  "output_manifest_sha256": "43f41253944c42e9b5a638e99e91372ea4468eb5f283efed6204bc1b8d8ddb7b",
+  "payload_sha256": "a2052385d8d8ea940f9a5230fbd05108f01db97dd4a746eba4e4ee4d221bac37",
+  "models": {
+    "included": 1
+  },
+  "included_model_ids": [
+    "RedHatAI/Apertus-8B-Instruct-2509-FP8-dynamic"
+  ],
+  "payload": {
+    "files": 5,
+    "models": 1
+  }
+}

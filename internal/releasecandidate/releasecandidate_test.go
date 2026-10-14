@@ -1,8 +1,10 @@
 package releasecandidate
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -39,8 +41,62 @@ func TestValidateAndStageRejectsIncompatibleBenchmark(t *testing.T) {
 func TestValidateAndStageAcceptsCapitalizationDifference(t *testing.T) {
 	cfg := newTestCandidate(t, "example/model")
 	writeFile(t, filepath.Join(cfg.CatalogDir, "validated-models-catalog.yaml"), "source: test\nmodels:\n  - name: Example/Model\n    artifacts:\n      - uri: oci://example.invalid/model:1\n", 0o644)
+	refreshQualificationReport(t, cfg)
 	if _, err := ValidateAndStage(cfg); err != nil {
 		t.Fatalf("capitalization-only ID difference should be compatible: %v", err)
+	}
+}
+
+func TestValidateAndStageRejectsQualificationReportPayloadMismatch(t *testing.T) {
+	cfg := newTestCandidate(t, "example/model")
+	report, err := os.ReadFile(cfg.BenchmarkQualificationReport)
+	if err != nil {
+		t.Fatal(err)
+	}
+	report = []byte(strings.Replace(string(report), `"payload_sha256": "`, `"payload_sha256": "ffffffff`, 1))
+	writeFile(t, cfg.BenchmarkQualificationReport, string(report), 0o644)
+
+	_, err = ValidateAndStage(cfg)
+	if err == nil || !strings.Contains(err.Error(), "payload_sha256 does not match") {
+		t.Fatalf("expected qualification payload digest error, got %v", err)
+	}
+}
+
+func TestValidateAndStageRejectsUnapprovedQualificationReport(t *testing.T) {
+	cfg := newTestCandidate(t, "example/model")
+	report, err := os.ReadFile(cfg.BenchmarkQualificationReport)
+	if err != nil {
+		t.Fatal(err)
+	}
+	report = []byte(strings.Replace(string(report), `"review_status": "approved"`, `"review_status": "pending"`, 1))
+	writeFile(t, cfg.BenchmarkQualificationReport, string(report), 0o644)
+
+	_, err = ValidateAndStage(cfg)
+	if err == nil || !strings.Contains(err.Error(), `exclusion review_status "pending" must be "approved"`) {
+		t.Fatalf("expected unapproved qualification report error, got %v", err)
+	}
+}
+
+func TestValidateAndStageRejectsAgentIndexCatalogDrift(t *testing.T) {
+	cfg := newTestCandidate(t, "example/model")
+	writeFile(t, cfg.RuntimeFileList, "validated-models-catalog.yaml\nother-models-catalog.yaml\nredhat-agents-catalog.yaml\n", 0o644)
+	writeFile(t, filepath.Join(cfg.CatalogDir, "redhat-agents-catalog.yaml"), `source: test
+agents:
+  - name: first-agent
+    repositoryUrl: https://github.com/example/agents/tree/main/agents/first
+  - name: stale-agent
+    repositoryUrl: https://github.com/example/agents/tree/main/agents/stale
+`, 0o644)
+	writeFile(t, filepath.Join(cfg.CatalogDir, "redhat-agents-index.yaml"), `source: test
+repository: example/agents
+branch: main
+agents:
+  - path: agents/first
+`, 0o644)
+
+	_, err := ValidateAndStage(cfg)
+	if err == nil || !strings.Contains(err.Error(), `generated agent repositoryUrl "https://github.com/example/agents/tree/main/agents/stale"`) {
+		t.Fatalf("expected agent index/catalog drift error, got %v", err)
 	}
 }
 
@@ -239,6 +295,7 @@ func newTestCandidate(t *testing.T, benchmarkModel string) Config {
 	catalogDir := filepath.Join(root, "data")
 	inputDir := filepath.Join(root, "input")
 	benchmarkDir := filepath.Join(root, "benchmarks")
+	qualificationReport := filepath.Join(root, "benchmark-qualification-report.json")
 	runtimeList := filepath.Join(root, "runtime-files.txt")
 	outputDir := filepath.Join(root, "out")
 	loaderDir := filepath.Join(root, "loaders")
@@ -271,15 +328,94 @@ printf 'MODEL_CATALOG_LOADER_CHECK_OK=%s\n' "$MODEL_CATALOG_VERSION"
 `
 	writeFile(t, filepath.Join(loaderDir, "fixture-v1"), loader, 0o755)
 
-	return Config{
-		CatalogDir:           catalogDir,
-		ProducerInputDir:     inputDir,
-		BenchmarkDir:         benchmarkDir,
-		RuntimeFileList:      runtimeList,
-		OutputDir:            outputDir,
-		LoaderCheckDir:       loaderDir,
-		SupportedVersionList: supportedVersions,
+	cfg := Config{
+		CatalogDir:                   catalogDir,
+		ProducerInputDir:             inputDir,
+		BenchmarkDir:                 benchmarkDir,
+		BenchmarkQualificationReport: qualificationReport,
+		RuntimeFileList:              runtimeList,
+		OutputDir:                    outputDir,
+		LoaderCheckDir:               loaderDir,
+		SupportedVersionList:         supportedVersions,
 	}
+	refreshQualificationReport(t, cfg)
+	return cfg
+}
+
+func refreshQualificationReport(t *testing.T, cfg Config) {
+	t.Helper()
+	payload := map[string][]byte{}
+	var modelIDs []string
+	err := filepath.WalkDir(cfg.BenchmarkDir, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(cfg.BenchmarkDir, path)
+		if err != nil {
+			return err
+		}
+		payload[filepath.ToSlash(rel)] = data
+		if filepath.Base(path) == "metadata.json" {
+			var metadata modelMetadata
+			if err := json.Unmarshal(data, &metadata); err != nil {
+				return err
+			}
+			modelIDs = append(modelIDs, metadata.ID)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sort.Strings(modelIDs)
+	catalogFiles := make([]map[string]string, 0, 2)
+	for _, name := range []string{"other-models-catalog.yaml", "validated-models-catalog.yaml"} {
+		data, err := os.ReadFile(filepath.Join(cfg.CatalogDir, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		catalogFiles = append(catalogFiles, map[string]string{"name": name, "sha256": digestBytes(data)})
+	}
+	report := map[string]any{
+		"version":            qualificationReportVersion,
+		"match_policy":       benchmarkMatchPolicy,
+		"benchmark_revision": strings.Repeat("1", 40),
+		"catalog_revision":   strings.Repeat("2", 40),
+		"source": map[string]any{
+			"revision": strings.Repeat("1", 40),
+		},
+		"catalog": map[string]any{
+			"revision": strings.Repeat("2", 40),
+			"files":    catalogFiles,
+		},
+		"exclusions": map[string]any{
+			"review_status":    "approved",
+			"review_reference": "test-approval",
+			"sha256":           strings.Repeat("3", 64),
+		},
+		"output_manifest_sha256": digestBytes(payload["manifest.json"]),
+		"payload_sha256":         digestPayload(payload),
+		"models": map[string]any{
+			"included": len(modelIDs),
+		},
+		"included_model_ids": modelIDs,
+		"payload": map[string]any{
+			"files":  len(payload),
+			"models": len(modelIDs),
+		},
+	}
+	data, err := json.MarshalIndent(report, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, cfg.BenchmarkQualificationReport, string(append(data, '\n')), 0o644)
 }
 
 func writeFile(t *testing.T, path, content string, mode os.FileMode) {

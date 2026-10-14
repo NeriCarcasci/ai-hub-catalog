@@ -1,6 +1,20 @@
-name: Validate Unified Model Catalog Data Image Fixture
+name: Build and Validate Model Catalog Data Image
 
 on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'data/**'
+      - 'input/**'
+      - 'release/**'
+      - 'cmd/release-candidate/**'
+      - 'internal/releasecandidate/**'
+      - 'Dockerfile'
+      - 'Dockerfile.konflux'
+      - '.dockerignore'
+      - 'Makefile'
+      - '.github/workflows/build-and-push-static-model-catalog-data.yml'
   pull_request:
     branches:
       - main
@@ -19,6 +33,10 @@ on:
 
 permissions:
   contents: read
+
+env:
+  REGISTRY: quay.io
+  IMAGE_NAME: opendatahub/odh-model-metadata-collection
 
 jobs:
   validate-and-build:
@@ -71,3 +89,57 @@ jobs:
             test -r /app/benchmarks/manifest.json &&
             test -r /app/benchmarks/RedHatAI/Apertus-8B-Instruct-2509-FP8-dynamic/metadata.json
           '
+
+  # Keep the image consumed by current model-registry-operator defaults fresh
+  # until the operator switches to the independently promoted unified image.
+  publish-legacy-catalog-image:
+    if: github.event_name != 'pull_request'
+    needs: validate-and-build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+
+      - name: Log in to Quay
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.QUAY_USERNAME }}
+          password: ${{ secrets.QUAY_PASSWORD }}
+
+      - name: Extract image metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          flavor: |
+            latest=false
+          tags: |
+            type=ref,event=branch
+            type=ref,event=branch,suffix=-{{sha}}
+            type=sha,prefix=sha-
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+
+      - name: Build and push current catalog-only image
+        uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25 # v5.4.0
+        with:
+          context: .
+          file: ./Dockerfile.konflux
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          platforms: linux/amd64,linux/arm64,linux/ppc64le
+
+      - name: Output published image details
+        run: |
+          echo "Catalog-only compatibility image pushed to: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}"
+          echo "Tags:"
+          echo "${{ steps.meta.outputs.tags }}" | sed 's/^/  - /'

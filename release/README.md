@@ -18,6 +18,7 @@ Create and validate the complete build context with one blocking command:
 ```sh
 make validate-release-candidate \
   BENCHMARK_DATA_DIR=/path/to/qualified/benchmark/data \
+  BENCHMARK_QUALIFICATION_REPORT=/path/to/benchmark-qualification-report.json \
   MODEL_CATALOG_LOADER_CHECK_DIR=/path/to/supported-version-checks
 ```
 
@@ -26,13 +27,17 @@ On success, the exact image payload is staged under `build/release-candidate/app
 ```sh
 make docker-build \
   BENCHMARK_DATA_DIR=/path/to/qualified/benchmark/data \
+  BENCHMARK_QUALIFICATION_REPORT=/path/to/benchmark-qualification-report.json \
   MODEL_CATALOG_LOADER_CHECK_DIR=/path/to/supported-version-checks
 ```
 
-`BENCHMARK_DATA_DIR` is the handoff boundary: its producer supplies the qualified
-runtime payload, while this repository validates the supplied files and their
-compatibility with the catalog candidate before staging either payload. Producing
-or approving that benchmark input remains outside this repository.
+`BENCHMARK_DATA_DIR` and `BENCHMARK_QUALIFICATION_REPORT` form the handoff
+boundary. The report remains outside the runtime payload. Product validation
+requires content-owner approval in that report and verifies its payload digest,
+manifest digest, included model IDs, source revisions, and exact catalog file
+hashes before staging either payload. Producing or approving those benchmark
+inputs remains outside this repository. Product mode refuses the committed
+fixture payload, report, loader, and version list.
 
 The loader-check directory must contain exactly one executable per entry in
 `supported-model-catalog-versions.txt`, named for that version, with no missing
@@ -61,7 +66,8 @@ startup or readiness alone is not a successful compatibility check.
 Validation rejects malformed YAML, JSON, and NDJSON (including duplicate
 mapping/object keys); duplicate catalog, provider, model, and benchmark artifact
 identifiers; missing or escaping producer references; index/catalog
-inconsistency; manifest/file mismatches; missing provider or variant-group
+inconsistency, including agent path-to-repository URL drift; manifest/file
+mismatches; qualification-report mismatches; missing provider or variant-group
 references; unexpected benchmark files; benchmark records stored under the
 wrong model path; catalog-to-benchmark incompatibility; symlinks; unsafe or
 overlapping paths; and a staged tree that is not readable by an arbitrary

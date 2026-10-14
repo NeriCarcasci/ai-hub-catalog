@@ -18,8 +18,10 @@ RELEASE_CANDIDATE_DIR?=$(BUILD_DIR)/release-candidate
 FIXTURE_RELEASE_CANDIDATE_DIR?=$(BUILD_DIR)/release-candidate-fixture
 RUNTIME_CATALOG_FILES?=release/runtime-catalog-files.txt
 BENCHMARK_DATA_DIR?=
+BENCHMARK_QUALIFICATION_REPORT?=
 MODEL_CATALOG_LOADER_CHECK_DIR?=
 FIXTURE_BENCHMARK_DATA_DIR=internal/releasecandidate/testdata/benchmarks
+FIXTURE_BENCHMARK_QUALIFICATION_REPORT=internal/releasecandidate/testdata/benchmark-qualification-report.json
 FIXTURE_LOADER_CHECK_DIR=internal/releasecandidate/testdata/loader-checks
 FIXTURE_SUPPORTED_VERSIONS=internal/releasecandidate/testdata/supported-model-catalog-versions.txt
 
@@ -269,10 +271,15 @@ validate-release-candidate:
 		echo "MODEL_CATALOG_LOADER_CHECK_DIR must contain supported-version loader checks"; \
 		exit 2; \
 	fi
+	@if [ -z "$(BENCHMARK_QUALIFICATION_REPORT)" ]; then \
+		echo "BENCHMARK_QUALIFICATION_REPORT must point to the producer qualification report"; \
+		exit 2; \
+	fi
 	$(GOCMD) run ./cmd/release-candidate \
 		--catalog-dir data \
 		--producer-input-dir input \
 		--benchmark-dir "$(BENCHMARK_DATA_DIR)" \
+		--benchmark-qualification-report "$(BENCHMARK_QUALIFICATION_REPORT)" \
 		--runtime-files "$(RUNTIME_CATALOG_FILES)" \
 		--output-dir "$(RELEASE_CANDIDATE_DIR)" \
 		--loader-check-dir "$(MODEL_CATALOG_LOADER_CHECK_DIR)" \
@@ -285,6 +292,7 @@ validate-release-candidate-fixture:
 		--catalog-dir data \
 		--producer-input-dir input \
 		--benchmark-dir "$(FIXTURE_BENCHMARK_DATA_DIR)" \
+		--benchmark-qualification-report "$(FIXTURE_BENCHMARK_QUALIFICATION_REPORT)" \
 		--runtime-files "$(RUNTIME_CATALOG_FILES)" \
 		--output-dir "$(FIXTURE_RELEASE_CANDIDATE_DIR)" \
 		--loader-check-dir "$(FIXTURE_LOADER_CHECK_DIR)" \
