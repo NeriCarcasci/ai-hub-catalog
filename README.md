@@ -194,6 +194,15 @@ under `build/release-candidate`. See [`release/README.md`](release/README.md)
 for the handoff and validation contract. `make validate-release-candidate-fixture`
 is a non-product CI proof only.
 
+The Make/Docker flow uses fixed staging directories:
+`build/release-candidate` for product inputs and
+`build/release-candidate-fixture` for the committed fixture. Overriding
+`RELEASE_CANDIDATE_DIR` or `FIXTURE_RELEASE_CANDIDATE_DIR` is rejected before
+validation because `.dockerignore` exposes only those directories to the image
+build. Standalone callers may still invoke `go run ./cmd/release-candidate`
+with an arbitrary `--output-dir`; that output is not automatically a Docker
+build context.
+
 The dual-payload loader matrix covers RHOAI 3.4 and 3.5. RHOAI 2.25 remains a
 catalog-only consumer because its Model Catalog implementation has no benchmark
 loader; the release gate still validates that the unified image contains a

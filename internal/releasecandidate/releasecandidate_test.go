@@ -2,11 +2,15 @@ package releasecandidate
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestValidateAndStage(t *testing.T) {
@@ -22,7 +26,7 @@ func TestValidateAndStage(t *testing.T) {
 	assertMode(t, filepath.Join(cfg.OutputDir, "app", "data", "validated-models-catalog.yaml"), 0o644)
 	assertMode(t, filepath.Join(cfg.OutputDir, "app", "benchmarks", "example", "model", "metadata.json"), 0o644)
 
-	if _, err := os.Stat(filepath.Join(cfg.OutputDir, "app", "data", "models-index.yaml")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(cfg.OutputDir, "app", "data", "validated-models-index.yaml")); !os.IsNotExist(err) {
 		t.Fatalf("producer-only index was staged: %v", err)
 	}
 }
@@ -97,6 +101,103 @@ agents:
 	_, err := ValidateAndStage(cfg)
 	if err == nil || !strings.Contains(err.Error(), `generated agent repositoryUrl "https://github.com/example/agents/tree/main/agents/stale"`) {
 		t.Fatalf("expected agent index/catalog drift error, got %v", err)
+	}
+}
+
+func TestValidateAndStageRejectsStaleModelCatalogArtifact(t *testing.T) {
+	cfg := newTestCandidate(t, "example/model")
+	writeFile(t, filepath.Join(cfg.CatalogDir, "validated-models-catalog.yaml"), `source: test
+models:
+  - name: example/model
+    artifacts:
+      - uri: oci://example.invalid/model:1
+      - uri: oci://example.invalid/stale:1
+`, 0o644)
+	refreshQualificationReport(t, cfg)
+
+	_, err := ValidateAndStage(cfg)
+	if err == nil || !strings.Contains(err.Error(), `artifact "example.invalid/stale:1" has no provenance`) {
+		t.Fatalf("expected stale catalog artifact error, got %v", err)
+	}
+}
+
+func TestValidateAndStageRejectsModelArtifactInWrongCatalog(t *testing.T) {
+	cfg := newTestCandidate(t, "example/model")
+	writeFile(t, filepath.Join(cfg.CatalogDir, "validated-models-catalog.yaml"), "source: test\nmodels:\n  - name: example/model\n    artifacts:\n      - uri: oci://example.invalid/other:1\n", 0o644)
+	writeFile(t, filepath.Join(cfg.CatalogDir, "other-models-catalog.yaml"), "source: test\nmodels:\n  - name: example/other\n    artifacts:\n      - uri: oci://example.invalid/model:1\n", 0o644)
+	refreshQualificationReport(t, cfg)
+
+	_, err := ValidateAndStage(cfg)
+	if err == nil || !strings.Contains(err.Error(), `artifact "example.invalid/model:1" is missing from corresponding generated model catalog`) {
+		t.Fatalf("expected per-index catalog placement error, got %v", err)
+	}
+}
+
+func TestValidateAndStageAcceptsSupplementalModelProvenance(t *testing.T) {
+	cfg := newTestCandidate(t, "example/model")
+	addSupplementalModelPair(t, cfg, true)
+
+	if _, err := ValidateAndStage(cfg); err != nil {
+		t.Fatalf("supplemental catalog provenance should validate: %v", err)
+	}
+}
+
+func TestValidateAndStageRejectsStaleSupplementalArtifact(t *testing.T) {
+	cfg := newTestCandidate(t, "example/model")
+	addSupplementalModelPair(t, cfg, true)
+	if err := os.Remove(filepath.Join(cfg.ProducerInputDir, "supplemental-catalog.yaml")); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := ValidateAndStage(cfg)
+	if err == nil || !strings.Contains(err.Error(), `artifact "example.invalid/supplemental:1" has no provenance`) {
+		t.Fatalf("expected stale supplemental artifact error, got %v", err)
+	}
+}
+
+func TestValidateAndStageRejectsSupplementalArtifactMissingFromOutput(t *testing.T) {
+	cfg := newTestCandidate(t, "example/model")
+	addSupplementalModelPair(t, cfg, false)
+
+	_, err := ValidateAndStage(cfg)
+	if err == nil || !strings.Contains(err.Error(), `supplemental catalog artifact "example.invalid/supplemental:1" is missing from generated model catalog`) {
+		t.Fatalf("expected missing supplemental artifact error, got %v", err)
+	}
+}
+
+func TestValidateAndStageRejectsSupplementalModelIdentityDrift(t *testing.T) {
+	cfg := newTestCandidate(t, "example/model")
+	addSupplementalModelPair(t, cfg, true)
+	path := filepath.Join(cfg.CatalogDir, "models-catalog.yaml")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data = []byte(strings.Replace(string(data), "name: example/supplemental", "name: example/stale", 1))
+	writeFile(t, path, string(data), 0o644)
+
+	_, err = ValidateAndStage(cfg)
+	if err == nil || !strings.Contains(err.Error(), `belongs to model "example/supplemental"`) || !strings.Contains(err.Error(), `assigns it to "example/stale"`) {
+		t.Fatalf("expected supplemental model identity drift error, got %v", err)
+	}
+}
+
+func TestValidateAndStageAcceptsMatchingMCPServerInputName(t *testing.T) {
+	cfg := newTestCandidate(t, "example/model")
+	addMCPServerPair(t, cfg, "com.example/test-server", "com.example/test-server")
+
+	if _, err := ValidateAndStage(cfg); err != nil {
+		t.Fatalf("matching MCP server producer name should validate: %v", err)
+	}
+}
+
+func TestValidateAndStageRejectsMCPServerInputNameMismatch(t *testing.T) {
+	cfg := newTestCandidate(t, "example/model")
+	addMCPServerPair(t, cfg, "com.example/indexed-server", "com.example/different-server")
+
+	_, err := ValidateAndStage(cfg)
+	if err == nil || !strings.Contains(err.Error(), `declares name "com.example/different-server", expected index name "com.example/indexed-server"`) {
+		t.Fatalf("expected MCP server producer name mismatch, got %v", err)
 	}
 }
 
@@ -187,6 +288,31 @@ func TestValidateAndStageRejectsNoOpLoader(t *testing.T) {
 	_, err := ValidateAndStage(cfg)
 	if err == nil || !strings.Contains(err.Error(), "did not attest successful loading") {
 		t.Fatalf("expected loader attestation error, got %v", err)
+	}
+}
+
+func TestValidateAndStageLoaderDescendantCannotHoldOutputPipesOpen(t *testing.T) {
+	cfg := newTestCandidate(t, "example/model")
+	previousWaitDelay := loaderCheckWaitDelay
+	loaderCheckWaitDelay = 50 * time.Millisecond
+	t.Cleanup(func() { loaderCheckWaitDelay = previousWaitDelay })
+	check := `#!/bin/sh
+sleep 30 &
+child=$!
+printf '%s\n' "$child" > "$(dirname "$0")/child.pid"
+printf 'MODEL_CATALOG_LOADER_CHECK_OK=%s\n' "$MODEL_CATALOG_VERSION"
+`
+	writeFile(t, filepath.Join(cfg.LoaderCheckDir, "fixture-v1"), check, 0o755)
+
+	started := time.Now()
+	_, err := ValidateAndStage(cfg)
+	elapsed := time.Since(started)
+	killLoaderChild(t, filepath.Join(cfg.LoaderCheckDir, "child.pid"))
+	if !errors.Is(err, exec.ErrWaitDelay) {
+		t.Fatalf("expected loader output pipe wait-delay error, got %v", err)
+	}
+	if elapsed > 2*time.Second {
+		t.Fatalf("loader validation waited too long for descendant output pipes: %s", elapsed)
 	}
 }
 
@@ -303,7 +429,8 @@ func newTestCandidate(t *testing.T, benchmarkModel string) Config {
 
 	writeFile(t, filepath.Join(catalogDir, "validated-models-catalog.yaml"), "source: test\nmodels:\n  - name: example/model\n    artifacts:\n      - uri: oci://example.invalid/model:1\n", 0o644)
 	writeFile(t, filepath.Join(catalogDir, "other-models-catalog.yaml"), "source: test\nmodels:\n  - name: example/other\n    artifacts:\n      - uri: oci://example.invalid/other:1\n", 0o644)
-	writeFile(t, filepath.Join(catalogDir, "models-index.yaml"), "models:\n  - uri: example.invalid/model:1\n", 0o644)
+	writeFile(t, filepath.Join(catalogDir, "validated-models-index.yaml"), "models:\n  - uri: example.invalid/model:1\n", 0o644)
+	writeFile(t, filepath.Join(catalogDir, "other-models-index.yaml"), "models:\n  - uri: example.invalid/other:1\n", 0o644)
 	writeFile(t, filepath.Join(inputDir, "source.yaml"), "name: source\n", 0o644)
 	writeFile(t, runtimeList, "validated-models-catalog.yaml\nother-models-catalog.yaml\n", 0o644)
 
@@ -340,6 +467,68 @@ printf 'MODEL_CATALOG_LOADER_CHECK_OK=%s\n' "$MODEL_CATALOG_VERSION"
 	}
 	refreshQualificationReport(t, cfg)
 	return cfg
+}
+
+func addSupplementalModelPair(t *testing.T, cfg Config, includeSupplementalOutput bool) {
+	t.Helper()
+	runtimeFiles, err := os.ReadFile(cfg.RuntimeFileList)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, cfg.RuntimeFileList, string(runtimeFiles)+"models-catalog.yaml\n", 0o644)
+	writeFile(t, filepath.Join(cfg.CatalogDir, "models-index.yaml"), `models:
+  - uri: example.invalid/indexed:1
+`, 0o644)
+	catalog := `source: test
+models:
+  - name: example/indexed
+    artifacts:
+      - uri: oci://example.invalid/indexed:1
+`
+	if includeSupplementalOutput {
+		catalog += `  - name: example/supplemental
+    artifacts:
+      - uri: oci://example.invalid/supplemental:1
+`
+	}
+	writeFile(t, filepath.Join(cfg.CatalogDir, "models-catalog.yaml"), catalog, 0o644)
+	writeFile(t, filepath.Join(cfg.ProducerInputDir, "supplemental-catalog.yaml"), `source: test
+models:
+  - name: example/supplemental
+    artifacts:
+      - uri: oci://example.invalid/supplemental:1
+`, 0o644)
+}
+
+func addMCPServerPair(t *testing.T, cfg Config, indexName, inputName string) {
+	t.Helper()
+	runtimeFiles, err := os.ReadFile(cfg.RuntimeFileList)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, cfg.RuntimeFileList, string(runtimeFiles)+"test-mcp-servers-catalog.yaml\n", 0o644)
+	writeFile(t, filepath.Join(cfg.CatalogDir, "test-mcp-servers-catalog.yaml"), "source: test\nmcp_servers:\n  - name: "+indexName+"\n", 0o644)
+	writeFile(t, filepath.Join(cfg.CatalogDir, "test-mcp-servers-index.yaml"), "mcp_servers:\n  - name: "+indexName+"\n    input_path: input/mcp_servers/test.yaml\n", 0o644)
+	writeFile(t, filepath.Join(cfg.ProducerInputDir, "mcp_servers", "test.yaml"), "name: "+inputName+"\n", 0o644)
+}
+
+func killLoaderChild(t *testing.T, pidPath string) {
+	t.Helper()
+	data, err := os.ReadFile(pidPath)
+	if err != nil {
+		t.Fatalf("read loader descendant pid: %v", err)
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil {
+		t.Fatalf("parse loader descendant pid: %v", err)
+	}
+	process, err := os.FindProcess(pid)
+	if err != nil {
+		t.Fatalf("find loader descendant: %v", err)
+	}
+	if err := process.Kill(); err != nil {
+		t.Fatalf("kill loader descendant: %v", err)
+	}
 }
 
 func refreshQualificationReport(t *testing.T, cfg Config) {

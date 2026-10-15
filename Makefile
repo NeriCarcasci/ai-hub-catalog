@@ -14,8 +14,8 @@ BINARY_UNIX=$(BINARY_NAME)_unix
 # Build parameters
 BUILD_DIR=build
 MAIN_PATH=./cmd/model-extractor
-RELEASE_CANDIDATE_DIR?=$(BUILD_DIR)/release-candidate
-FIXTURE_RELEASE_CANDIDATE_DIR?=$(BUILD_DIR)/release-candidate-fixture
+RELEASE_CANDIDATE_DIR?=build/release-candidate
+FIXTURE_RELEASE_CANDIDATE_DIR?=build/release-candidate-fixture
 RUNTIME_CATALOG_FILES?=release/runtime-catalog-files.txt
 BENCHMARK_DATA_DIR?=
 BENCHMARK_QUALIFICATION_REPORT?=
@@ -47,7 +47,7 @@ DOCKER_IMAGE_NAME?=quay.io/opendatahub/odh-model-metadata-collection
 DOCKER_IMAGE_TAG?=latest
 DOCKER_FULL_IMAGE_NAME=$(DOCKER_IMAGE_NAME):$(DOCKER_IMAGE_TAG)
 
-.PHONY: all build build-report clean test test-coverage lint fmt vet deps check help run process process-models process-redhat-models process-validated-models process-other-models process-redhat-mcp process-partner-mcp process-community-mcp process-agents report run-with-report validate-release-candidate validate-release-candidate-fixture docker-build docker-build-fixture
+.PHONY: all build build-report clean test test-coverage lint fmt vet deps check help run process process-models process-redhat-models process-validated-models process-other-models process-redhat-mcp process-partner-mcp process-community-mcp process-agents report run-with-report validate-release-candidate validate-release-candidate-fixture validate-product-release-candidate-output-path validate-fixture-release-candidate-output-path test-release-candidate-output-path-guards docker-build docker-build-fixture
 
 # Default target
 all: check build
@@ -219,7 +219,7 @@ run-with-report: run report
 dev: fmt vet test build
 
 # Full CI pipeline
-ci: deps check test validate-release-candidate-fixture build
+ci: deps check test test-release-candidate-output-path-guards validate-release-candidate-fixture build
 
 # Create release build
 release: clean
@@ -262,7 +262,7 @@ setup:
 # Validate every input and stage the exact bytes consumed by the unified Dockerfile.
 # Product use requires the qualified private payload and one loader executable
 # per supported Model Catalog version.
-validate-release-candidate:
+validate-release-candidate: validate-product-release-candidate-output-path
 	@if [ -z "$(BENCHMARK_DATA_DIR)" ]; then \
 		echo "BENCHMARK_DATA_DIR must point to a qualified benchmark payload"; \
 		exit 2; \
@@ -287,7 +287,7 @@ validate-release-candidate:
 
 # Fixture-only proof for CI. This path cannot be used by the default product
 # Docker build and contains no private benchmark data.
-validate-release-candidate-fixture:
+validate-release-candidate-fixture: validate-fixture-release-candidate-output-path
 	$(GOCMD) run ./cmd/release-candidate \
 		--catalog-dir data \
 		--producer-input-dir input \
@@ -298,6 +298,52 @@ validate-release-candidate-fixture:
 		--loader-check-dir "$(FIXTURE_LOADER_CHECK_DIR)" \
 		--supported-version-list "$(FIXTURE_SUPPORTED_VERSIONS)" \
 		--fixture-only
+
+# Docker only admits these two staging paths through .dockerignore. Reject Make
+# overrides before validation so a successful staging run cannot later fail at
+# COPY time. The release-candidate CLI itself intentionally remains configurable.
+validate-product-release-candidate-output-path:
+	@if [ "$(RELEASE_CANDIDATE_DIR)" != "build/release-candidate" ]; then \
+		echo "RELEASE_CANDIDATE_DIR must be exactly build/release-candidate for Make/Docker builds" >&2; \
+		exit 2; \
+	fi
+
+validate-fixture-release-candidate-output-path:
+	@if [ "$(FIXTURE_RELEASE_CANDIDATE_DIR)" != "build/release-candidate-fixture" ]; then \
+		echo "FIXTURE_RELEASE_CANDIDATE_DIR must be exactly build/release-candidate-fixture for Make/Docker builds" >&2; \
+		exit 2; \
+	fi
+
+# Regression coverage for the Make/Docker staging-path contract. Each override
+# must fail in the preflight target without creating its requested output.
+test-release-candidate-output-path-guards:
+	@tmp_root="$$(mktemp -d)"; \
+	product_output="$$tmp_root/product"; \
+	fixture_output="$$tmp_root/fixture"; \
+	product_log="$$tmp_root/product.log"; \
+	fixture_log="$$tmp_root/fixture.log"; \
+	product_status=0; \
+	$(MAKE) --no-print-directory validate-release-candidate \
+		RELEASE_CANDIDATE_DIR="$$product_output" >"$$product_log" 2>&1 || product_status=$$?; \
+	if [ "$$product_status" -eq 0 ] || \
+		! grep -Fq "RELEASE_CANDIDATE_DIR must be exactly build/release-candidate" "$$product_log" || \
+		[ -e "$$product_output" ]; then \
+		echo "custom product release-candidate path did not fail closed" >&2; \
+		cat "$$product_log" >&2; \
+		exit 1; \
+	fi; \
+	fixture_status=0; \
+	$(MAKE) --no-print-directory validate-release-candidate-fixture \
+		FIXTURE_RELEASE_CANDIDATE_DIR="$$fixture_output" >"$$fixture_log" 2>&1 || fixture_status=$$?; \
+	if [ "$$fixture_status" -eq 0 ] || \
+		! grep -Fq "FIXTURE_RELEASE_CANDIDATE_DIR must be exactly build/release-candidate-fixture" "$$fixture_log" || \
+		[ -e "$$fixture_output" ]; then \
+		echo "custom fixture release-candidate path did not fail closed" >&2; \
+		cat "$$fixture_log" >&2; \
+		exit 1; \
+	fi; \
+	rm "$$product_log" "$$fixture_log"; \
+	rmdir "$$tmp_root"
 
 # Build a product candidate only after the blocking validation succeeds.
 docker-build: validate-release-candidate

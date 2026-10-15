@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -51,6 +52,8 @@ const (
 	qualificationReportVersion = "1.0.0"
 	benchmarkMatchPolicy       = "case-insensitive-exact-full-model-id-v1"
 )
+
+var loaderCheckWaitDelay = 5 * time.Second
 
 type validationErrors struct {
 	errs []error
@@ -442,6 +445,7 @@ func runLoaderChecks(cfg Config) error {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 		command := exec.CommandContext(ctx, check)
 		command.Env = append(environment, "MODEL_CATALOG_VERSION="+version)
+		command.WaitDelay = loaderCheckWaitDelay
 		output, runErr := command.CombinedOutput()
 		cancel()
 		if ctx.Err() == context.DeadlineExceeded {
@@ -538,6 +542,7 @@ func validateCatalogSources(cfg Config, runtimeFiles []string) (map[string]struc
 	payload := make(map[string][]byte, len(runtimeFiles))
 	modelIDsFolded := map[string]string{}
 	catalogArtifacts := map[string]string{}
+	modelCatalogArtifacts := map[string]map[string]string{}
 	catalogAgentURLs := map[string]string{}
 	collections := map[string]map[string]string{
 		"models":           {},
@@ -574,6 +579,9 @@ func validateCatalogSources(cfg Config, runtimeFiles []string) (map[string]struc
 			problems.add("runtime catalog %s: %v", path, err)
 			continue
 		}
+		if kind == "models" {
+			modelCatalogArtifacts[name] = map[string]string{}
+		}
 		for i, entry := range entries {
 			id := strings.TrimSpace(entry.Name)
 			if id == "" {
@@ -608,6 +616,7 @@ func validateCatalogSources(cfg Config, runtimeFiles []string) (map[string]struc
 					} else {
 						catalogArtifacts[uri] = path
 					}
+					modelCatalogArtifacts[name][uri] = id
 				}
 			} else if kind == "agents" {
 				repositoryURL := strings.TrimSpace(entry.RepositoryURL)
@@ -652,7 +661,7 @@ func validateCatalogSources(cfg Config, runtimeFiles []string) (map[string]struc
 	}
 
 	problems.addErr(validateProducerInputs(cfg.ProducerInputDir))
-	problems.addErr(validateIndexes(cfg, collections, catalogArtifacts, catalogAgentURLs))
+	problems.addErr(validateIndexes(cfg, collections, modelCatalogArtifacts, catalogAgentURLs))
 	return modelIDs, payload, catalogAgentURLs, len(runtimeFiles), problems.err()
 }
 
@@ -715,15 +724,18 @@ func validateProducerInputs(root string) error {
 	return problems.err()
 }
 
-func validateIndexes(cfg Config, catalogs map[string]map[string]string, catalogArtifacts, catalogAgentURLs map[string]string) error {
+func validateIndexes(cfg Config, catalogs map[string]map[string]string, modelCatalogArtifacts map[string]map[string]string, catalogAgentURLs map[string]string) error {
 	var problems validationErrors
 	catalogDir := cfg.CatalogDir
 	indexedArtifacts := map[string]string{}
+	pairedModelCatalogs := map[string]string{}
 	indexedNames := map[string]map[string]string{
 		"mcp_servers":      {},
 		"serving_runtimes": {},
 	}
 	indexedAgentURLs := map[string]string{}
+	supplementalArtifacts, err := readSupplementalModelArtifacts(cfg)
+	problems.addErr(err)
 	entries, err := os.ReadDir(catalogDir)
 	if err != nil {
 		return err
@@ -745,24 +757,21 @@ func validateIndexes(cfg Config, catalogs map[string]map[string]string, catalogA
 		}
 		switch {
 		case doc.Models != nil:
-			if len(doc.Models) == 0 {
-				problems.add("producer index %s has an empty models collection", path)
+			catalogName := strings.TrimSuffix(entry.Name(), "-index.yaml") + "-catalog.yaml"
+			catalogArtifacts, exists := modelCatalogArtifacts[catalogName]
+			if !exists {
+				problems.add("producer model index %s has no corresponding runtime catalog %s", path, filepath.Join(catalogDir, catalogName))
+				catalogArtifacts = map[string]string{}
+			} else if first, paired := pairedModelCatalogs[catalogName]; paired {
+				problems.add("producer indexes %s and %s both correspond to model catalog %s", first, path, catalogName)
+			} else {
+				pairedModelCatalogs[catalogName] = path
 			}
-			for i, item := range doc.Models {
-				uri := normalizeArtifactURI(item.URI)
-				if uri == "" {
-					problems.add("producer index %s model %d has no uri", path, i+1)
-					continue
-				}
-				if first, exists := indexedArtifacts[uri]; exists {
-					problems.add("producer indexes %s and %s both contain model artifact %q", first, path, uri)
-				} else {
-					indexedArtifacts[uri] = path
-				}
-				if _, exists := catalogArtifacts[uri]; !exists {
-					problems.add("producer index %s artifact %q is missing from the generated model catalogs", path, uri)
-				}
+			pairSupplemental := map[string]string{}
+			if catalogName == "models-catalog.yaml" {
+				pairSupplemental = supplementalArtifacts
 			}
+			validateModelIndexPair(path, filepath.Join(catalogDir, catalogName), doc.Models, catalogArtifacts, pairSupplemental, indexedArtifacts, &problems)
 		case doc.MCPServers != nil:
 			validateLocalIndex(cfg, path, "mcp_servers", doc.MCPServers, catalogs["mcp_servers"], indexedNames["mcp_servers"], &problems)
 		case doc.ServingRuntimes != nil:
@@ -771,6 +780,17 @@ func validateIndexes(cfg Config, catalogs map[string]map[string]string, catalogA
 			validateAgentIndex(path, doc, catalogAgentURLs, indexedAgentURLs, &problems)
 		default:
 			problems.add("producer index %s has no supported top-level collection", path)
+		}
+	}
+	for catalogName := range modelCatalogArtifacts {
+		if _, exists := pairedModelCatalogs[catalogName]; !exists {
+			indexName := strings.TrimSuffix(catalogName, "-catalog.yaml") + "-index.yaml"
+			problems.add("generated model catalog %s has no corresponding producer index %s", filepath.Join(catalogDir, catalogName), filepath.Join(catalogDir, indexName))
+		}
+	}
+	if _, exists := modelCatalogArtifacts["models-catalog.yaml"]; !exists {
+		for uri := range supplementalArtifacts {
+			problems.add("supplemental catalog artifact %q is missing from generated model catalog %s", uri, filepath.Join(catalogDir, "models-catalog.yaml"))
 		}
 	}
 	for _, kind := range []string{"mcp_servers", "serving_runtimes"} {
@@ -786,6 +806,104 @@ func validateIndexes(cfg Config, catalogs map[string]map[string]string, catalogA
 		}
 	}
 	return problems.err()
+}
+
+func readSupplementalModelArtifacts(cfg Config) (map[string]string, error) {
+	artifacts := map[string]string{}
+	path := filepath.Join(cfg.ProducerInputDir, "supplemental-catalog.yaml")
+	data, err := readRegularFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return artifacts, nil
+		}
+		return artifacts, err
+	}
+	if err := validateYAML(path, data); err != nil {
+		return artifacts, err
+	}
+	var doc catalogDocument
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		return artifacts, fmt.Errorf("parse supplemental catalog %s: %w", path, err)
+	}
+	kind, entries, err := catalogEntries(doc)
+	if err != nil {
+		return artifacts, fmt.Errorf("supplemental catalog %s: %w", path, err)
+	}
+	if kind != "models" {
+		return artifacts, fmt.Errorf("supplemental catalog %s must contain a models collection", path)
+	}
+
+	var problems validationErrors
+	for i, entry := range entries {
+		modelName := strings.TrimSpace(entry.Name)
+		if modelName == "" {
+			problems.add("supplemental catalog %s model %d has no name", path, i+1)
+		}
+		if len(entry.Artifacts) == 0 {
+			problems.add("supplemental catalog %s model %q has no artifacts", path, modelName)
+		}
+		for artifactIndex, artifact := range entry.Artifacts {
+			uri := normalizeArtifactURI(artifact.URI)
+			if uri == "" {
+				problems.add("supplemental catalog %s model %q artifact %d has no uri", path, modelName, artifactIndex+1)
+				continue
+			}
+			if first, exists := artifacts[uri]; exists {
+				problems.add("supplemental catalog %s models %q and %q both contain artifact %q", path, first, modelName, uri)
+				continue
+			}
+			artifacts[uri] = modelName
+		}
+	}
+	return artifacts, problems.err()
+}
+
+func validateModelIndexPair(indexPath, catalogPath string, entries []modelIndexEntry, catalogArtifacts, supplementalArtifacts, indexedArtifacts map[string]string, problems *validationErrors) {
+	if len(entries) == 0 {
+		problems.add("producer index %s has an empty models collection", indexPath)
+	}
+	indexArtifacts := map[string]struct{}{}
+	for i, item := range entries {
+		uri := normalizeArtifactURI(item.URI)
+		if uri == "" {
+			problems.add("producer index %s model %d has no uri", indexPath, i+1)
+			continue
+		}
+		if _, exists := indexArtifacts[uri]; exists {
+			problems.add("producer index %s contains duplicate model artifact %q", indexPath, uri)
+			continue
+		}
+		indexArtifacts[uri] = struct{}{}
+		if first, exists := indexedArtifacts[uri]; exists {
+			problems.add("producer indexes %s and %s both contain model artifact %q", first, indexPath, uri)
+		} else {
+			indexedArtifacts[uri] = indexPath
+		}
+		if _, exists := catalogArtifacts[uri]; !exists {
+			problems.add("producer index %s artifact %q is missing from corresponding generated model catalog %s", indexPath, uri, catalogPath)
+		}
+	}
+
+	for uri, supplementalModelName := range supplementalArtifacts {
+		if _, exists := indexArtifacts[uri]; exists {
+			problems.add("model artifact %q is declared by both producer index %s and supplemental catalog", uri, indexPath)
+		}
+		catalogModelName, exists := catalogArtifacts[uri]
+		if !exists {
+			problems.add("supplemental catalog artifact %q is missing from generated model catalog %s", uri, catalogPath)
+		} else if catalogModelName != supplementalModelName {
+			problems.add("supplemental catalog artifact %q belongs to model %q but generated model catalog %s assigns it to %q", uri, supplementalModelName, catalogPath, catalogModelName)
+		}
+	}
+	for uri, modelName := range catalogArtifacts {
+		if _, exists := indexArtifacts[uri]; exists {
+			continue
+		}
+		if _, exists := supplementalArtifacts[uri]; exists {
+			continue
+		}
+		problems.add("generated model catalog %s model %q artifact %q has no provenance in corresponding producer index %s or supplemental catalog", catalogPath, modelName, uri, indexPath)
+	}
 }
 
 func validateAgentIndex(indexPath string, doc indexDocument, catalogAgentURLs, indexedAgentURLs map[string]string, problems *validationErrors) {
@@ -868,8 +986,13 @@ func validateLocalIndex(cfg Config, path, kind string, entries []localIndexEntry
 		}
 		if strings.TrimSpace(item.InputPath) == "" {
 			problems.add("producer index %s %q has no input_path", path, name)
-		} else if err := validateProducerReference(cfg, item.InputPath); err != nil {
-			problems.add("producer index %s %q input_path %s: %v", path, name, item.InputPath, err)
+		} else {
+			resolved, err := resolveProducerReference(cfg, item.InputPath)
+			if err != nil {
+				problems.add("producer index %s %q input_path %s: %v", path, name, item.InputPath, err)
+			} else if kind == "mcp_servers" {
+				problems.addErr(validateMCPServerInputName(resolved, name))
+			}
 		}
 		if _, exists := catalogNames[name]; !exists {
 			problems.add("producer index %s name %q is missing from the generated %s catalogs", path, name, kind)
@@ -877,21 +1000,38 @@ func validateLocalIndex(cfg Config, path, kind string, entries []localIndexEntry
 	}
 }
 
-func validateProducerReference(cfg Config, reference string) error {
+func resolveProducerReference(cfg Config, reference string) (string, error) {
 	if filepath.IsAbs(reference) || strings.Contains(reference, "\\") {
-		return fmt.Errorf("must be a portable repository-relative path")
+		return "", fmt.Errorf("must be a portable repository-relative path")
 	}
 	clean := filepath.Clean(reference)
 	if clean != reference || clean == "." || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
-		return fmt.Errorf("must be a clean repository-relative path")
+		return "", fmt.Errorf("must be a clean repository-relative path")
 	}
 	repositoryRoot := filepath.Dir(cfg.CatalogDir)
 	resolved, err := resolveExistingRegularFile("producer input", filepath.Join(repositoryRoot, clean))
 	if err != nil {
-		return err
+		return "", err
 	}
 	if !pathContains(cfg.ProducerInputDir, resolved) {
-		return fmt.Errorf("resolves outside producer input directory %s", cfg.ProducerInputDir)
+		return "", fmt.Errorf("resolves outside producer input directory %s", cfg.ProducerInputDir)
+	}
+	return resolved, nil
+}
+
+func validateMCPServerInputName(path, expected string) error {
+	data, err := readRegularFile(path)
+	if err != nil {
+		return err
+	}
+	var metadata struct {
+		Name string `yaml:"name"`
+	}
+	if err := yaml.Unmarshal(data, &metadata); err != nil {
+		return fmt.Errorf("parse MCP server producer input %s: %w", path, err)
+	}
+	if metadata.Name != expected {
+		return fmt.Errorf("MCP server producer input %s declares name %q, expected index name %q", path, metadata.Name, expected)
 	}
 	return nil
 }

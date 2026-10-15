@@ -31,6 +31,14 @@ make docker-build \
   MODEL_CATALOG_LOADER_CHECK_DIR=/path/to/supported-version-checks
 ```
 
+The Make/Docker contract deliberately fixes the product staging path at
+`build/release-candidate` and the fixture path at
+`build/release-candidate-fixture`. Make rejects overrides before running the
+validator because `.dockerignore` admits only those paths. The underlying
+`release-candidate` CLI continues to accept an arbitrary `--output-dir` for
+standalone validation or development, but such output is not consumed by the
+Docker targets.
+
 `BENCHMARK_DATA_DIR` and `BENCHMARK_QUALIFICATION_REPORT` form the handoff
 boundary. The report remains outside the runtime payload. Product validation
 requires content-owner approval in that report and verifies its payload digest,
