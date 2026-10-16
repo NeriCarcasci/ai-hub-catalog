@@ -1,6 +1,8 @@
 {
   "version": "1.0.0",
   "match_policy": "case-insensitive-exact-full-model-id-v1",
+  "qualification_mode": "fixture",
+  "promotion_eligible": false,
   "benchmark_revision": "1111111111111111111111111111111111111111",
   "catalog_revision": "2222222222222222222222222222222222222222",
   "source": {

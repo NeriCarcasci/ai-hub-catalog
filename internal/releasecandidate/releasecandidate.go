@@ -164,6 +164,8 @@ type benchmarkValidation struct {
 type qualificationReport struct {
 	Version           string `json:"version"`
 	MatchPolicy       string `json:"match_policy"`
+	QualificationMode string `json:"qualification_mode"`
+	PromotionEligible bool   `json:"promotion_eligible"`
 	BenchmarkRevision string `json:"benchmark_revision"`
 	CatalogRevision   string `json:"catalog_revision"`
 	Source            struct {
@@ -1051,6 +1053,14 @@ func validateQualificationReport(cfg Config, benchmark benchmarkValidation, cata
 	}
 	if report.MatchPolicy != benchmarkMatchPolicy {
 		problems.add("benchmark qualification report match_policy %q must be %q", report.MatchPolicy, benchmarkMatchPolicy)
+	}
+	if !cfg.FixtureOnly {
+		if report.QualificationMode != "release" {
+			problems.add("benchmark qualification report qualification_mode %q must be %q", report.QualificationMode, "release")
+		}
+		if !report.PromotionEligible {
+			problems.add("benchmark qualification report promotion_eligible must be true")
+		}
 	}
 	for label, revision := range map[string]string{
 		"benchmark_revision": report.BenchmarkRevision,

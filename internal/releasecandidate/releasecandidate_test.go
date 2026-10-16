@@ -81,6 +81,46 @@ func TestValidateAndStageRejectsUnapprovedQualificationReport(t *testing.T) {
 	}
 }
 
+func TestValidateAndStageRejectsTestModeQualificationReport(t *testing.T) {
+	cfg := newTestCandidate(t, "example/model")
+	report, err := os.ReadFile(cfg.BenchmarkQualificationReport)
+	if err != nil {
+		t.Fatal(err)
+	}
+	report = []byte(strings.Replace(string(report), `"qualification_mode": "release"`, `"qualification_mode": "test"`, 1))
+	report = []byte(strings.Replace(string(report), `"promotion_eligible": true`, `"promotion_eligible": false`, 1))
+	writeFile(t, cfg.BenchmarkQualificationReport, string(report), 0o644)
+
+	_, err = ValidateAndStage(cfg)
+	if err == nil || !strings.Contains(err.Error(), `qualification_mode "test" must be "release"`) {
+		t.Fatalf("expected test-mode qualification report error, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "promotion_eligible must be true") {
+		t.Fatalf("expected non-promotable qualification report error, got %v", err)
+	}
+	if _, statErr := os.Stat(cfg.OutputDir); !os.IsNotExist(statErr) {
+		t.Fatalf("test-mode candidate must not be staged, stat error = %v", statErr)
+	}
+}
+
+func TestValidateAndStageRejectsNonPromotableQualificationReport(t *testing.T) {
+	cfg := newTestCandidate(t, "example/model")
+	report, err := os.ReadFile(cfg.BenchmarkQualificationReport)
+	if err != nil {
+		t.Fatal(err)
+	}
+	report = []byte(strings.Replace(string(report), `"promotion_eligible": true`, `"promotion_eligible": false`, 1))
+	writeFile(t, cfg.BenchmarkQualificationReport, string(report), 0o644)
+
+	_, err = ValidateAndStage(cfg)
+	if err == nil || !strings.Contains(err.Error(), "promotion_eligible must be true") {
+		t.Fatalf("expected non-promotable qualification report error, got %v", err)
+	}
+	if _, statErr := os.Stat(cfg.OutputDir); !os.IsNotExist(statErr) {
+		t.Fatalf("non-promotable candidate must not be staged, stat error = %v", statErr)
+	}
+}
+
 func TestValidateAndStageRejectsAgentIndexCatalogDrift(t *testing.T) {
 	cfg := newTestCandidate(t, "example/model")
 	writeFile(t, cfg.RuntimeFileList, "validated-models-catalog.yaml\nother-models-catalog.yaml\nredhat-agents-catalog.yaml\n", 0o644)
@@ -575,6 +615,8 @@ func refreshQualificationReport(t *testing.T, cfg Config) {
 	report := map[string]any{
 		"version":            qualificationReportVersion,
 		"match_policy":       benchmarkMatchPolicy,
+		"qualification_mode": "release",
+		"promotion_eligible": true,
 		"benchmark_revision": strings.Repeat("1", 40),
 		"catalog_revision":   strings.Repeat("2", 40),
 		"source": map[string]any{

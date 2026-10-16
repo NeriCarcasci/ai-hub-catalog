@@ -43,9 +43,10 @@ Docker targets.
 boundary. The report remains outside the runtime payload. Product validation
 requires content-owner approval in that report and verifies its payload digest,
 manifest digest, included model IDs, source revisions, and exact catalog file
-hashes before staging either payload. Producing or approving those benchmark
-inputs remains outside this repository. Product mode refuses the committed
-fixture payload, report, loader, and version list.
+hashes before staging either payload. The report must be produced in release
+mode and explicitly marked as eligible for promotion. Producing or approving
+those benchmark inputs remains outside this repository. Product mode refuses
+the committed fixture payload, report, loader, and version list.
 
 The loader-check directory must contain exactly one executable per entry in
 `supported-model-catalog-versions.txt`, named for that version, with no missing
